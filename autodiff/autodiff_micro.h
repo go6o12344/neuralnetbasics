@@ -26,6 +26,8 @@ public:
 	void (*backward)(Value*);
 	Value(){}
 	Value(double val, std::vector<Value*> children = std::vector<Value*>(), void(*func)(Value*) = nullptr): val(val), grad(0), children(children), backward(func) {}
+	Value(Value &other) = default;
+	Value& operator =(Value &other) = default;
 	void backprop();
 	friend std::ostream& operator <<(std::ostream&, Value&);
 };
@@ -108,9 +110,18 @@ void relu_back(Value* n){
 
 
 Value* relu(Value *a){
-	return new Value{a->val > 0 ? a->val : 0, std::vector<Value*>({a}), &add_back};
+	return new Value{a->val > 0 ? a->val : 0, std::vector<Value*>({a}), &relu_back};
 }
 
+
+void linear_back(Value *n){
+	n->children[0]->grad += n->grad * 1;
+}
+
+
+Value* linear(Value *a){
+	return new Value{a->val, std::vector<Value*>({a}), &linear_back};
+}
 
 // checks if val in v
 template<typename T>
