@@ -13,10 +13,12 @@
 // armadillo's documentation is a pain to work with too
 // that's why we go mini for now
 
-// will probably end up stealing a lot of ideas from micrograd
-
-
-class Value{
+// handling of dynamic memory issues is left to the reader as an exercise
+// seriously though, memory deallocation must be handled by caller.
+// TODO: copy constructor and assignment. copies currently share children 
+// (as in the objects in the container, not the container itself) 
+// due to how vector copy works.
+struct Value{
 public:
 	double val;
 	double grad;
@@ -43,9 +45,8 @@ void add_back(Value* n){
 }
 
 
-Value add(Value &a, Value &b){
-	Value res{a.val + b.val, std::vector<Value*>({&a, &b}), &add_back};
-	return res;
+Value* add(Value *a, Value *b){
+	return new Value{a->val + b->val, std::vector<Value*>({a, b}), &add_back};
 }
 
 
@@ -55,9 +56,8 @@ void subtract_back(Value* n){
 }
 
 
-Value subtract(Value &a, Value &b){
-	Value res{a.val - b.val, std::vector<Value*>({&a, &b}), &subtract_back};
-	return res;
+Value* subtract(Value *a, Value *b){
+	return new Value{a->val - b->val, std::vector<Value*>({a, b}), &subtract_back};
 }
 
 
@@ -67,9 +67,9 @@ void multiply_back(Value* n){
 }
 
 
-Value multiply(Value &a, Value &b){
-	Value res{a.val * b.val, std::vector<Value*>({&a, &b}), &multiply_back};
-	return res;
+Value* multiply(Value *a, Value *b){
+	
+	return new Value{a->val * b->val, std::vector<Value*>({a, b}), &multiply_back};
 }
 
 
@@ -79,11 +79,10 @@ void divide_back(Value* n){
 }
 
 
-Value divide(Value &a, Value &b){
-	if(b.val == 0)
+Value* divide(Value *a, Value *b){
+	if(b->val == 0)
 		throw std::runtime_error("Division by zero");
-	Value res{a.val / b.val, std::vector<Value*>({&a, &b}), &divide_back};
-	return res;
+	return new Value{a->val / b->val, std::vector<Value*>({a, b}), &divide_back};;
 }
 
 
@@ -98,9 +97,8 @@ void sigmoid_back(Value *n){
 }
 
 
-Value sigmoid(Value &a){
-	Value res{phi(a.val), std::vector<Value*>({&a}), &sigmoid_back};
-	return res;
+Value* sigmoid(Value *a){
+	return new Value{phi(a->val), std::vector<Value*>({a}), &sigmoid_back};
 }
 
 
@@ -109,9 +107,8 @@ void relu_back(Value* n){
 }
 
 
-Value relu(Value &a){
-	Value res{a.val > 0 ? a.val : 0, std::vector<Value*>({&a}), &add_back};
-	return res;
+Value* relu(Value *a){
+	return new Value{a->val > 0 ? a->val : 0, std::vector<Value*>({a}), &add_back};
 }
 
 
@@ -125,7 +122,7 @@ bool in(std::vector<T>& v, T& val){
 	return false;
 }
 
-// topo sort
+// topo sort, returns nodes in reverse topological order
 // method assumes calculation graph is a DAG
 // too lazy to implement safety checks, that's like two whole lines i need to write
 void topo(Value *root, std::vector<Value*>& visited, std::vector<Value*>& res){
