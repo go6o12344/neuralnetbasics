@@ -8,160 +8,239 @@
 #include <iostream>
 #include <algorithm>
 
-// version for arbitrary input/output dimensions currently being developed
-// it's almost ready but i can't be bothered to test/debug though
-// armadillo's documentation is a pain to work with too
-// that's why we go mini for now
 
-// handling of dynamic memory issues is left to the reader as an exercise
-// seriously though, memory deallocation must be handled by caller.
-// TODO: copy constructor and assignment. copies currently share children 
-// (as in the objects in the container, not the container itself) 
-// due to how vector copy works.
-struct Value{
+template<typename T = double>
+class Node{
+	
 public:
-	double val;
-	double grad;
-	std::vector<Value*> children;
-	void (*backward)(Value*);
-	Value(){}
-	Value(double val, std::vector<Value*> children = std::vector<Value*>(), void(*func)(Value*) = nullptr): val(val), grad(0), children(children), backward(func) {}
-	Value(Value &other) = default;
-	Value& operator =(Value &other) = default;
-	void backprop();
-	friend std::ostream& operator <<(std::ostream&, Value&);
+	// too lazy to call getters/setters everywhere
+	T val;
+	T grad;
+	
+	/*
+	 * Backpropagation will be implemented in the following way: 
+	 * Graph class will call those methods on all nodes in topological order (reverse topo for backprop)
+	 * That is why these functions will not be recursive
+	 */
+	virtual void forward() = 0;
+	virtual void backward() = 0;
+	
+	// constructors and =
+	Node(T val = 0, T grad = 0): val(val), grad(grad) {}
+	Node(Node &other) = default;
+	Node& operator =(Node<T> &other) = default;
+	Node(Node&&) = default;
+	Node& operator =(Node<T>&&) = default;
+	
+	// dont forget virtual copy and destructor
+	virtual Node<T>* clone() = 0;	
+	virtual ~Node(){}
 };
 
 
-std::ostream& operator <<(std::ostream& os, Value& v){
-	os << "value - " << v.val << " gradient - " << v.grad << std::endl;
-	for(auto child: v.children)
-		os << *child;
-	return os;
-}
-
-
-void add_back(Value* n){
-	n->children[0]->grad += n->grad * 1;
-	n->children[1]->grad += n->grad * 1;
-}
-
-
-Value* add(Value *a, Value *b){
-	return new Value{a->val + b->val, std::vector<Value*>({a, b}), &add_back};
-}
-
-
-void subtract_back(Value* n){
-	n->children[0]->grad += n->grad * 1;
-	n->children[1]->grad += n->grad * (-1);
-}
-
-
-Value* subtract(Value *a, Value *b){
-	return new Value{a->val - b->val, std::vector<Value*>({a, b}), &subtract_back};
-}
-
-
-void multiply_back(Value* n){
-	n->children[0]->grad += n->grad * n->children[1]->val;
-	n->children[1]->grad += n->grad * n->children[0]->val;
-}
-
-
-Value* multiply(Value *a, Value *b){
+template<typename T = double>
+class Value: public Node<T>{
+public:
+	Value() = default;
+	Value(T val): Node<T>(val) {}
+	Value(Value &other) = default;
+	Value& operator =(Value<T> &other) = default;
+	Value(Value&&) = default;
+	Value& operator =(Value<T>&&) = default;
+	void forward() override { this->grad = 0; }
+	void backward() override {}
+	virtual Value<T>* clone() { return new Value(*this); };
 	
-	return new Value{a->val * b->val, std::vector<Value*>({a, b}), &multiply_back};
-}
+};
 
-
-void divide_back(Value* n){
-	n->children[0]->grad += n->grad * (1 / n->children[1]->val);
-	n->children[1]->grad += n->grad * (n->children[0]->val / (n->children[1]->val * n->children[1]->val));
-}
-
-
-Value* divide(Value *a, Value *b){
-	if(b->val == 0)
-		throw std::runtime_error("Division by zero");
-	return new Value{a->val / b->val, std::vector<Value*>({a, b}), &divide_back};;
-}
-
-
-double phi(double x){
-	return 1 / (1 + std::exp(-x));
-}
-
-
-void sigmoid_back(Value *n){
-	double temp = phi(n->children[0]->val);
-	n->children[0]->grad += n->grad * temp * (1- temp);
-}
-
-
-Value* sigmoid(Value *a){
-	return new Value{phi(a->val), std::vector<Value*>({a}), &sigmoid_back};
-}
-
-
-void relu_back(Value* n){
-	n->children[0]->grad += n->grad * (n->children[0]->val > 0 ? 1 : 0);
-}
-
-
-Value* relu(Value *a){
-	return new Value{a->val > 0 ? a->val : 0, std::vector<Value*>({a}), &relu_back};
-}
-
-
-void linear_back(Value *n){
-	n->children[0]->grad += n->grad * 1;
-}
-
-
-Value* linear(Value *a){
-	return new Value{a->val, std::vector<Value*>({a}), &linear_back};
-}
-
-// checks if val in v
-template<typename T>
-bool in(std::vector<T>& v, T& val){
-	for(auto i : v){
-		if(i == val)
-			return true;
+// graph will hold all nodes
+// and is expected to handle all memory management
+// copies share children, this is intended behavior
+// TODO: 
+template<typename T = double>
+class UnaryExpression: public Node<T>{
+protected:
+	Node<T>* child;
+public:
+	UnaryExpression(Node<T>* child): child(child) {}
+	void bindChild(Node<T> &node){
+		child = &node;
 	}
-	return false;
-}
+};
 
-// topo sort, returns nodes in reverse topological order
-// method assumes calculation graph is a DAG
-// too lazy to implement safety checks, that's like two whole lines i need to write
-void topo(Value *root, std::vector<Value*>& visited, std::vector<Value*>& res){
-	for(auto child: root->children){
-		if(!in(visited, child)){
-			visited.push_back(child);
-			topo(child, visited, res);
-		}
+
+template<typename T = double>
+class BinaryExpression: public Node<T>{
+protected:
+	Node<T>* left;
+	Node<T>* right;
+public:
+	BinaryExpression(Node<T> *left, Node<T> *right): Node<T>(), left(left), right(right) {}
+	void bindLeft(Node<T> &node){
+		left = &node;
 	}
-	res.push_back(root);
-}
+	void bindRight(Node<T> &node){
+		right = &node;
+	}
+};
 
 
-void Value::backprop(){
-	// sort nodes
-	std::vector<Value*> visited;
-	std::vector<Value*> nodes;
-	topo(this, visited, nodes);
-	std::reverse(nodes.begin(), nodes.end());
+template<typename T = double>
+class Add: public BinaryExpression<T>{
+public:
+	Add(Node<T> *left, Node<T> *right):BinaryExpression<T>(left, right) {}
 	
-	// update gradients
-	this->grad = 1;
-	for(auto v: nodes){
-		if(v->backward != nullptr)
-			v->backward(v);
+	void forward() override {
+		this->grad = 0;
+		this->val = this->left->val + this->right->val;
 	}
 	
-}
+	void backward() override {
+		this->left->grad += this->grad;
+		this->right->grad += this->grad;
+	}
+	
+	
+	virtual Add<T>* clone(){ return new Add<T>(*this); };
+};
+
+
+template<typename T = double>
+class Sub: public BinaryExpression<T>{
+public:
+	Sub(Node<T> *left, Node<T> *right): BinaryExpression<T>(left, right) {}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = this->left->val - this->right->val;
+	}
+	
+	void backward() override {
+		this->left->grad += this->grad;
+		this->right->grad -= this->grad;
+	}
+	
+	virtual Sub<T>* clone(){ return new Sub<T>(*this); };
+};
+
+
+template<typename T = double>
+class Mul: public BinaryExpression<T>{
+public:
+	Mul(Node<T> *left, Node<T> *right): BinaryExpression<T>(left, right) {}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = this->left->val * this->right->val;
+	}
+	
+	void backward() override {
+		this->left->grad += this->grad * this->right->val;
+		this->right->grad += this->grad * this->left->val;
+	}
+	
+	virtual Mul<T>* clone(){ return new Mul<T>(*this); };
+};
+
+
+template<typename T = double>
+class Pow: public UnaryExpression<T>{
+protected:
+	int power;
+public:
+	Pow(Node<T> *child, int power): UnaryExpression<T>(child), power(power) {}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = pow(this->child->val, this->power);
+	}
+	
+	void backward() override {
+		this->child->grad = this->power * pow(this->child->val, this->power - 1);
+	}
+	
+	virtual Pow<T>* clone(){ return new Pow<T>(*this); };
+};
+
+
+template<typename T = double>
+class Div: public BinaryExpression<T>{
+public:
+	Div(Node<T> *left, Node<T> *right): BinaryExpression<T>(left, right) {}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = this->left->val / this->right->val;
+	}
+	
+	void backward() override {
+		this->left->grad += this->grad / this->right->val;
+		this->right->grad += -1. / this->right->val / this->right->val * this->grad * this->left->val;
+	}
+	
+	virtual Div<T>* clone(){ return new Div<T>(*this); };
+};
+
+
+template<typename T = double>
+class Sigmoid: public UnaryExpression<T>{
+protected:
+	static double phi(double x){
+		return 1 / (1 + std::exp(-x));
+	}
+public:
+	Sigmoid(Node<T> *child): UnaryExpression<T>(child){}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = phi(this->child->val);
+	}
+	
+	void backward() override {
+		double temp = phi(this->child->val);
+		this->child->grad += this->grad * temp * (1- temp);
+	}
+	
+	virtual Sigmoid<T>* clone(){ return new Sigmoid<T>(*this); };
+};
+
+// this is redundant, leaving it for consistency
+// specifically thinking about passing activator to neuron
+// no harm in explicitly specifying linear (except some performance but oh well)
+template<typename T = double>
+class Linear: public UnaryExpression<T>{
+public:
+	Linear(Node<T> *child): UnaryExpression<T>(child){}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = this->child->val;
+	}
+	
+	void backward() override {
+		this->child->grad += this->grad;
+	}
+	
+	virtual Linear<T>* clone(){ return new Linear<T>(*this); };
+};
+
+
+template<typename T = double>
+class Relu: public UnaryExpression<T>{
+public:
+	Relu(Node<T> *child): UnaryExpression<T>(child) {}
+	
+	void forward() override {
+		this->grad = 0;
+		this->val = this->child->val > 0 ? this->child->val : 0;
+	}
+	
+	void backward() override {
+		this->child->grad += this->grad * (this->val > 0 ? 1 : 0);
+	}
+	
+	virtual Relu<T>* clone(){ return new Relu<T>(*this); };
+};
 
 
 #endif
