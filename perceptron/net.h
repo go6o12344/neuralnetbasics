@@ -1,259 +1,140 @@
 #ifndef __NET_H__
 #define __NET_H__
 
-#include "autodiff_micro.h"
+#include "autodiff.h"
 #include <vector>
+#include <random>
 
-// delete everything but leaves
-// leaves will only be weights, biases or variables
-void handleMemory(Value* val){
-	if(val->children.size() == 0){
-		delete val;
-		return;
-	}
-	for(auto child: val->children)
-		handleMemory(child);
-	delete val;
-}
+// TODO: templating, kinda forgot about it
 
 
-class Module{
+using std::vector;
+enum ACTIVATOR{LOGISTIC, RELU, LINEAR};
+
+// only perceptrons supported
+// convolution neuron weights are a matrix, init is completely different etc
+// thinking of a good OOP architecture is a pain
+class Neuron{
+private:
+	vector<Value*> weights;
+	Value* bias;
+	Node* output_node;
+	void init(const vector<Node*> &inputs, const ACTIVATOR a) override;
 public:
-	virtual std::vector<Value*> getParams() = 0;
-	void descent(){
-		auto params = this->getParams();
-		for(auto param: params)
-			param->val -= param->grad;
+	Neuron(const vector<Node*> &inputs);
+	// copy won't really work because there's no good way to copy the neuron's graph
+	// remembering information about input nodes is redundant (except for copying purposes)
+	// that's why no copy
+	Neuron(const Neuron&) = delete;
+	Neuron& operator =(const Neuron&) = delete;
+	Neuron(const Neuron&&) = delete;
+	Neuron& operator =(const Neuron&&) = delete;
+	void updateParams(){
+		this->bias.val -= this->bias.grad;
+		for(auto &weight: this->weights)
+			this->weight.val -= this->weight.grad;
 	}
-	void resetGrad(){
-		auto params = this->getParams();
-		for(auto param: params)
-			param->grad = 0;
-	}
+	// net will handle graph deallocation
+	~Node() {}
 };
 
 
-class Neuron : public Module{
-	// those never have children
-	// activator functions break if it's a vector of instances, vector returns copies of values on read (?, pretty sure that's what docs said)
-	std::vector<Value*> weights;
-	Value* bias;
-	Value* (*activator)(Value*);
-	void copy(const Neuron &other);
-	void del();
-	void move(Neuron &&other);
+Neuron::Neuron(const vector<Node*> &inputs){
+	std::random_device rd;
+	std::mt19937 mt(rd());
+	std::uniform_real_distribution<double> dist(-1.0, 1.0);
+	this->bias = new Value(dist(mt));
+	for(size_t i = 0; i < input_size; ++i){
+		this->weights.push_back(new Value(dist(mt)));
+	}
+	this->init();
+}
+
+// build neuron calculation subgraph
+// called in constructor
+void Neuron::init(const vector<Node*> &inputs, const ACTIVATOR a){
+	if(inputs.size() != weights.size())
+		throw std::runtime_error("bad argument passed to Neuron constructor: input size mismatch");
+	Node *temp = new Mul(inputs[0], weights[0]);
+	for(size_t i = 1; i < inputs.size() ++i;){
+		Node *temp1 = new Mul(inputs[i], weights[i]);
+		temp = new Add(temp, temp1);
+	}
+	switch(a){
+		case LOGISTIC:
+			temp = new Sigmoid(temp);
+			break;
+		case RELU:
+			temp = new Relu(temp);
+			break;
+		case LINEAR:
+			temp = new Linear(temp);
+			break;
+		default:
+			// how did we get here?
+			temp = new Sigmoid(temp);
+	}
+	this->output_node = temp;
+}
+
+
+class Layer{
+protected:
+	vector<Neuron*> neurons;
 public:
-	Neuron(size_t weight_count, double bias, Value* (*activator)(Value*) = sigmoid):Module(), weights{weight_count, nullptr},  bias{new Value{bias}}, activator{activator}
-	{
-		for(size_t i = 0; i < weight_count; ++i){
-			weights[i] = new Value(1.);
+	Layer(const size_t neuron_count, const vector<Node*> inputs, const ACTIVATOR a);
+	void updateParams(){
+		for(auto& n: this->neurons)
+			n.updateParams();
+	}
+	vector<Node*>
+	
+	
+};
+
+
+Layer::Layer(const size_t neuron_count, const vector<Node*> inputs, const ACTIVATOR a){
+	// neurons need to be stored as pointers, no copy or default constructor
+	neurons = vector<Neuron*>(neuron_count, nullptr);
+	for(size_t i = 0; i < neuron_count; ++i){
+		neurons[i] = new Neuron(inputs, a);
+	}
+	~Layer(){
+		// net won't handle deletion of neurons
+		for(auto n: neurons)
+			delete n;
+	}
+}
+
+// TODO: finish this
+// remember to delete the nodes
+/*
+class Net{
+	vector<Layer*> layers;
+	vector<Node*> all;
+	vector<Value*> values;  // modern humanity needs more of these
+						    // or maybe we're just inherently flawed idk
+public:
+	Net(size_t input_size, vector<size_t> layer_sizes, size_t output_size);
+	void bindValues(vector<double> &values){
+		if(values.size() != this->value.size())
+			throw std::runtime_error("bad argument passed to Net::bindValues; values size mismatch");
+		for(size_t i = 0; i < values.size(); ++i){
+			this->values[i]->bind_value(values[i]);
 		}
 	}
-	Neuron(const Neuron &other);
-	Neuron& operator =(const Neuron &other);
-	Neuron(Neuron &&other);
-	Neuron& operator =(Neuron &&other);
-	~Neuron();
-	Value* activate(std::vector<Value*> &args);
-	
-	// need those to do gradient descent
-	// this will be used by the network to update the value objects on train
-	std::vector<Value*> getParams(){
-		std::vector<Value*> res{weights};
-		res.push_back(bias);
-		return res;
-	}
-	
-};
-
-
-void Neuron::copy(const Neuron &other){
-	// bias has no children, so we don't care about issues with the copy constructor for now
-	bias = new Value(*other.bias);
-	weights = std::vector<Value*>(other.weights.size(), nullptr);
-	// the above statement but for weights
-	for(size_t i = 0; i < weights.size(); ++i)
-		weights[i] = new Value(*other.weights[i]);
-	activator = other.activator;
 }
 
 
-void Neuron::del(){
-	for(auto w: weights)
-		delete w;
-	delete bias;
-}
-
-
-void Neuron::move(Neuron &&other){
-	// bias has no children, so we don't care about issues with the copy constructor for now
-	bias = other.bias;
-	other.bias = nullptr;
-	weights = std::vector<Value*>(other.weights.size(), nullptr);
-	for(size_t i = 0; i < weights.size(); ++i){
-		other.weights[i] = nullptr;
-	}
-	activator = other.activator;
-}
-
-
-Neuron::Neuron(const Neuron &other){
-	copy(other);
-}
-
-
-Neuron& Neuron::operator =(const Neuron &other){
-	if(this != &other){
-		del();
-		copy(other);
-	}
-	return *this;
-}
-
-
-Neuron::Neuron(Neuron &&other){
-	move(std::move(other));
-}
-
-
-Neuron& Neuron::operator =(Neuron &&other){
-	if(this != &other){
-		del();
-		move(std::move(other));
-	}
-	return *this;
-}
-
-
-Neuron::~Neuron(){
-	del();
-}
-
-
-Value* Neuron::activate(std::vector<Value*> &args){
-	if(args.size() == 0)
-		return bias;
-	if(args.size() != weights.size())
-		throw std::runtime_error("wrong argument size for activation");
-	Value *temp;
-	temp = multiply(args[0], weights[0]);
-	for(size_t i = 1; i < args.size(); ++i){
-		temp = add(temp, multiply(args[i], weights[i]));
-	}
-	temp = add(temp, bias);
-	temp = activator(temp);
-	return temp;
-}
-
-
-class Layer : public Module{
-	std::vector<Neuron> neurons;
-public:
-	Layer(size_t input_size, size_t output_size, Value*(*activator)(Value*)):neurons{output_size, Neuron{input_size, 1, activator}} {}
-	std::vector<Value*> getParams();
-	std::vector<Value*> activate(std::vector<Value*>& args);
-};
-
-
-std::vector<Value*> Layer::getParams(){
-	std::vector<Value*> res;
-	for(auto n: neurons){
-		auto v = n.getParams();
-		res.insert(res.end(), v.begin(), v.end());
-	}
-	return res;
-}
-
-
-std::vector<Value*> Layer::activate(std::vector<Value*> &args){
-	std::vector<Value*> res{neurons.size(), nullptr};
-	for(size_t i = 0; i < neurons.size(); ++i)
-		res[i] = neurons[i].activate(args);
-	return res;
-}
-
-/*
-class NeuralNet: public Module{
-	std::vector<Layer> layers;
-	std::vector<Value*> activate(std::vector<double> &args);
-	Value*(*error)(std::vector<Value*>, std::vector<Value*>);
-public:
-	NeuralNet(size_t inputsize, std::vector<size_t> &shape, std::vector<Value*(*)(Value*)> &activators,Value*(*error)(std::vector<Value*>&, std::vector<Value*>&));
-	std::vector<double> evaluate(std::vector<double>& args);
-	void train(std::vector<double> &args, std::vector<double>& expected);
-	std::vector<Value*> getParams();
-};
-
-NeuralNet::NeuralNet
-(
-	size_t inputsize,
-	std::vector<size_t> &shape, 
-	std::vector<Value*(*)(Value*)> &activators,
-	Value*(*error)(std::vector<Value*>&, std::vector<Value*>&)
-):
-Module{},
-layers{},
-error{error}
+Net::Net(size_t input_size, vector<size_t> layer_sizes, size_t output_size, ACTIVATOR a = SIGMOID):
+layers(layer_sizes.size()), all(), values(input_size, nullptr)
 {
-	if(shape.size() != activators.size())
-		throw std::runtime_error("Mismatch of layer count and activator count");
-	// shape describes neuron count for each layer
-	// which is the same as output size of layer
-	layers.push_back(Layer(inputsize, shape[0], activators[0]));
-	for(size_t i = 1; i < shape.size(); ++i){
-		layers.push_back(Layer(shape[i - 1], shape[i], activators[i]));
+	for()
+	if()
+	for(size_t i = 1; i < this->layers.size(); ++i){
+		layers[i] = new Layer(layer_sizes[i], a);
 	}
-}
-
-
-std::vector<Value*> NeuralNet::activate(std::vector<double> &args){
-	std::vector<Value*> _args{args.size(), nullptr};
-	for(size_t i = 0; i < _args.size(); ++i){
-		_args[i] = new Value(args[i]);
-	}
-	for(auto layer: layers)
-		_args = layer.activate(_args);
-	return _args;
-}
-
-
-void NeuralNet::train(std::vector<double> &args, std::vector<double> &expected){
-	std::vector<Value*> _expected{expected.size(), nullptr};
-	for(size_t i = 0; i < expected.size(); ++i){
-		_expected[i] = new Value(expected[i]);
-	}
-	
-	std::vector<Value*> curr = activate(args);
-	
-	auto head = error(curr, _expected);
-	head->backprop();
-	handleMemory(head);
-	descent();
-	resetGrad();
-}
-
-
-std::vector<double> NeuralNet::evaluate(std::vector<double>& args){
-	std::vector<Value*> temp = activate(args);
-	std::vector<double> res{temp.size(), 0};
-	for(size_t i = 0; i < res.size(); ++i){
-		res[i] = temp[i]->val;
-	}
-	handleMemory(temp[0]);
-	for(size_t i = 1; i < temp.size(); ++i){
-		delete temp[i];
-	}
-	return res;
-}
-
-
-std::vector<Value*> NeuralNet::getParams(){
-	std::vector<Value*> res;
-	for(auto layer: layers){
-		std::vector<Value*> lparams = layer.getParams();
-		res.insert(res.end(), lparams.begin(), lparams.end());
-	}
-	return res;
+	if()
 }
 */
 
