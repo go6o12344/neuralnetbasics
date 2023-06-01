@@ -18,9 +18,8 @@ public:
 	T grad;
 	
 	/*
-	 * Backpropagation will be implemented in the following way: 
-	 * Graph class will call those methods on all nodes in topological order (reverse topo for backprop)
-	 * That is why these functions will not be recursive
+	 * Nodes will call each other recursively, no graph class will be implemented
+	 * Calls to forward and backward are expected to alternate, starting with a call to forward
 	 */
 	virtual void forward() = 0;
 	virtual void backward() = 0;
@@ -33,6 +32,7 @@ public:
 	Node& operator =(Node<T>&&) = default;
 	
 	// dont forget virtual copy and destructor
+	// didn't need destructor
 	virtual Node<T>* clone() = 0;	
 	virtual ~Node(){}
 };
@@ -47,16 +47,19 @@ public:
 	Value& operator =(Value<T> &other) = default;
 	Value(Value&&) = default;
 	Value& operator =(Value<T>&&) = default;
-	void forward() override { this->grad = 0; }
+	void bind_value(T x){
+		this->val = x;
+	}
+	void forward() override { 
+		this->grad = 0;
+	}
 	void backward() override {}
 	virtual Value<T>* clone() { return new Value(*this); };
 	
 };
 
-// graph will hold all nodes
-// and is expected to handle all memory management
+// caller is responsible for handling memory
 // copies share children, this is intended behavior
-// TODO: 
 template<typename T = double>
 class UnaryExpression: public Node<T>{
 protected:
